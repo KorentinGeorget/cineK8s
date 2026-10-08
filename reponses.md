@@ -108,3 +108,13 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8082/api/tickets \
 
 ---
 
+## Partie 3 — Conteneuriser
+
+**Q3.1** — On copie `pom.xml` avant `src/` pour tirer parti du système de cache en couches (layers) de Docker. Le téléchargement des dépendances (`mvn dependency:go-offline`) est long ; tant que `pom.xml` ne change pas, cette couche est réutilisée depuis le cache. Lorsqu'on ne modifie qu'une ligne de code Java dans `src/`, seules les couches à partir de `COPY src ./src` sont réexécutées, ce qui réduit le temps de compilation à quelques secondes.
+
+**Q3.2** — `-XX:MaxRAMPercentage=75` est préférable car il s'adapte dynamiquement à la limite de mémoire fixée par le cgroup du conteneur (ex. définie par Kubernetes via `resources.limits.memory`). Une valeur statique comme `-Xmx512m` est rigide : si la limite du conteneur passe à 1 Go, la JVM reste bridée ; si la limite passe à 256 Mo, la JVM dépasse la limite du conteneur et est tuée par le noyau (`OOMKilled`). De plus, le ratio de 75 % laisse 25 % de marge pour la mémoire non-heap (Metaspace, stacks des threads, code cache, buffers natifs).
+
+**Q3.3** — Dans Kubernetes, les Pods démarrent de façon asynchrone et indépendante. Si les Pods `ticket` démarrent avant `movie`, leur `readinessProbe` échoue lors de la vérification de l'indicateur `movie` ; les Pods `ticket` restent temporairement dans l'état `0/1 (NotReady)` et ne reçoivent aucun trafic via leur Service. Dès que les Pods `movie` démarrent et que le Service `movie` devient joignable via le DNS interne, la readiness passe à `UP`, et les Pods `ticket` deviennent `1/1 (Ready)` sans nécessiter aucun redémarrage.
+
+---
+

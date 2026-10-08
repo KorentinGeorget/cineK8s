@@ -1,16 +1,15 @@
-# ✏️ À COMPLÉTER (Partie 3.2 de l'énoncé) — remplacez chaque "___"
 services:
   movie:
     build: ./movie-service
     # TODO 1 : nom:tag de l'image produite
-    image: ___
+    image: movie-service:1.0.0
     ports: ["8080:8080"]
     environment:
       # TODO 2 : la variable d'environnement qui surcharge la propriété movie.environment
-      ___: compose
+      MOVIE_ENVIRONMENT: compose
     healthcheck:
       # TODO 3 : l'URL de la liveness (commande wget, comme ci-dessous)
-      test: ["CMD", "wget", "-qO-", "___"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health/liveness"]
       interval: 5s
       retries: 20
 
@@ -20,8 +19,8 @@ services:
     ports: ["8082:8080"]
     environment:
       # TODO 4 : la variable qui surcharge movie.url ; la valeur utilise le NOM du service Compose
-      ___: ___
+      MOVIE_URL: http://movie:8080
     depends_on:
       # TODO 5 : attendre que le service movie soit "healthy"
-      ___:
-        condition: ___
+      movie:
+        condition: service_healthy

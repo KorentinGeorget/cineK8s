@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cinema
+  namespace: cinema-exam
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: cinema.local
+      http:
+        paths:
+          - path: /api/movies
+            pathType: Prefix
+            backend:
+              service:
+                name: movie
+                port:
+                  name: http
+          - path: /api/tickets
+            pathType: Prefix
+            backend:
+              service:
+                name: ticket
+                port:
+                  name: http

@@ -174,3 +174,48 @@ $ kubectl exec deploy/ticket -- wget -qO- http://localhost:8080/actuator/health/
 
 ---
 
+## Partie 5 — Exposer avec un Ingress
+
+Sorties de test :
+```bash
+# Titres
+$ curl -s http://cinema.local/api/movies | jq '.[].title'
+"Pod Fiction"
+"Le Seigneur des Pods"
+"Docker Wars"
+"Rollback to the Future"
+
+# Réservation
+$ curl -s -X POST http://cinema.local/api/tickets -H 'Content-Type: application/json' \
+  -d '{"movieId":3,"seats":10}' | jq
+{
+  "id": 1,
+  "movieId": 3,
+  "movieTitle": "Docker Wars",
+  "seats": 10,
+  "total": 90.00,
+  "createdAt": "2026-10-08T09:13:26.750729822Z"
+}
+
+# Load-balancing (whoami)
+$ for i in $(seq 1 6); do curl -s http://cinema.local/api/movies/whoami | jq -r .hostname; done
+movie-59684459f4-x8qsx
+movie-59684459f4-trd4g
+movie-59684459f4-trd4g
+movie-59684459f4-trd4g
+movie-59684459f4-x8qsx
+movie-59684459f4-x8qsx
+
+# Actuator health
+$ curl -s -o /dev/null -w '%{http_code}\n' http://cinema.local/actuator/health
+404
+```
+
+**Q5.1** — Deux Pods `movie` distincts ont répondu en alternance. C'est le `Service` Kubernetes `movie` (associé à l'Ingress controller) qui assure la répartition de charge (load-balancing de niveau 4/7) entre les adresses IP des Pods cibles inscrits dans ses Endpoints.
+
+**Q5.2** — Avec `pathType: Exact` sur `/api/movies`, seule la route exacte `/api/movies` matcherait la règle de l'Ingress. Un appel sur une sous-ressource telle que `GET /api/movies/1` ou `/api/movies/whoami` ne correspondrait à aucune règle de routage et renverrait un code d'erreur HTTP **`404 Not Found`**.
+
+**Q5.3** — On obtient le code HTTP **`404 Not Found`**. C'est un comportement tout à fait souhaitable : les endpoints Actuator exposent des métriques d'infrastructure et des détails techniques sensibles qui doivent rester strictement réservés au réseau interne du cluster (pour les probes kubelet et le scraping de monitoring) et ne doivent jamais être rendus accessibles au public via l'Ingress externe.
+
+---
+

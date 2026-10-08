@@ -13,4 +13,4 @@ management:
         enabled: true
       group:
         readiness:
-          include: readinessState      # TODO — Q1.3 : à compléter
+          include: readinessState,movie

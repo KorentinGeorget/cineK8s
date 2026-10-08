@@ -219,3 +219,87 @@ $ curl -s -o /dev/null -w '%{http_code}\n' http://cinema.local/actuator/health
 
 ---
 
+## Partie 6 — Casser pour comprendre
+
+### 6.1 — Le service `movie` disparaît
+
+**Prédictions avant exécution :**
+- (a) `READY` et `RESTARTS` des Pods `ticket` après 30 s : `READY: 0/1`, `RESTARTS: 0`
+- (b) Contenu de `kubectl get endpoints ticket` : Vide / aucun endpoint
+- (c) Code HTTP de `GET http://cinema.local/api/tickets` : `503 Service Temporarily Unavailable`
+- (d) Statut de la **liveness** de `ticket` : `UP`
+
+**Observations réelles :**
+```bash
+$ kubectl scale deploy/movie --replicas=0
+$ sleep 30
+$ kubectl get pods
+NAME                      READY   STATUS    RESTARTS   AGE
+ticket-66d95c98b6-ct7wp   0/1     Running   0          97s
+ticket-66d95c98b6-vc2xx   0/1     Running   0          97s
+
+$ kubectl get endpoints ticket
+NAME     ENDPOINTS   AGE
+ticket               2m18s
+
+$ curl -si http://cinema.local/api/tickets | head -1
+HTTP/1.1 503 Service Temporarily Unavailable
+```
+
+Après rétablissement (`kubectl scale deploy/movie --replicas=2`) :
+```bash
+NAME                      READY   STATUS    RESTARTS   AGE
+movie-59684459f4-hzbl8    1/1     Running   0          15s
+movie-59684459f4-m6fv9    1/1     Running   0          15s
+ticket-66d95c98b6-ct7wp   1/1     Running   0          113s
+ticket-66d95c98b6-vc2xx   1/1     Running   0          113s
+```
+
+**Q6.1** — 
+Déroulement en 4 étapes entre l'arrêt de `movie` et le code 503 :
+1. **Échec de la readiness probe** : Suite à la disparition des Pods `movie`, le composant `MovieHealthIndicator` de `ticket-service` échoue à contacter `http://movie:8080/actuator/health/liveness`. L'endpoint `/actuator/health/readiness` bascule à `DOWN`. Après 3 échecs consécutifs (`failureThreshold: 3`), le kubelet marque les conteneurs `ticket` comme `NotReady`.
+2. **Éviction des Endpoints** : Le contrôleur d'endpoints du plan de contrôle Kubernetes détecte que les Pods `ticket` ne sont plus prêts et supprime immédiatement leurs adresses IP des Endpoints du Service `ticket`.
+3. **Synchronisation de l'Ingress** : Le contrôleur Ingress Nginx met à jour dynamiquement sa table amont (upstream) et constate que le backend `ticket` ne possède plus aucun serveur disponible.
+4. **Renvoi de l'erreur 503** : Toute requête entrante sur `http://cinema.local/api/tickets` aboutit sur un upstream sans backend actif dans Nginx, qui renvoie directement le code HTTP `503 Service Temporarily Unavailable`.
+
+*Pourquoi `RESTARTS` est resté à 0* : La `livenessProbe` surveille `/actuator/health/liveness`, qui n'inclut pas le bean de santé `movie`. Le contexte local de l'application étant parfaitement opérationnel, la liveness est restée `UP`, donc le kubelet n'a déclenché aucun redémarrage.
+
+---
+
+### 6.2 — Mission dépannage (`broken/ticket-debug.yaml`)
+
+| # | Statut observé | Commande de diagnostic | Cause exacte | Correction apportée |
+|---|----------------|------------------------|--------------|---------------------|
+| 1 | `ErrImagePull` / `ImagePullBackOff` | `kubectl describe pod -l app=ticket-debug` (section Events) | `imagePullPolicy: Always` force le kubelet à interroger le registre distant Docker Hub (`docker.io/library/ticket-service:1.0.0`), où l'image n'existe pas, au lieu d'utiliser l'image présente localement. | Remplacer `imagePullPolicy: Always` par `imagePullPolicy: IfNotPresent`. |
+| 2 | `CreateContainerConfigError` | `kubectl describe pod -l app=ticket-debug` (section Events) | Erreur `configmap "ticket-configmap" not found` : le Pod référence une ConfigMap inexistante (`ticket-configmap`), alors que la ressource s'appelle `ticket-config`. | Modifier `configMapRef.name` de `ticket-configmap` à `ticket-config`. |
+| 3 | `Running` mais bloqué à `0/1` indéfiniment | `kubectl describe pod -l app=ticket-debug` (section Events) | Erreur `Readiness probe failed: connect: connection refused` : la probe interroge le port `8081`, alors que Spring Boot écoute sur le port `8080`. | Modifier le port de la `readinessProbe` de `8081` à `8080` (ou le nom de port `http`). |
+
+Après correction des 3 erreurs, le Pod est passé à `1/1 Running` avec succès :
+```
+NAME                           READY   STATUS    RESTARTS   AGE
+ticket-debug-56f4f5848-jb5qh   1/1     Running   0          14s
+```
+
+---
+
+### 6.3 — Changer la configuration sans rebuild
+
+```bash
+$ kubectl apply -f k8s/10-config.yaml
+configmap/movie-config configured
+
+$ curl -s http://cinema.local/api/movies/whoami
+{"environment":"kubernetes","hostname":"movie-59684459f4-hzbl8"}
+
+$ kubectl rollout restart deploy/movie
+$ kubectl rollout status deploy/movie
+deployment "movie" successfully rolled out
+
+$ curl -s http://cinema.local/api/movies/whoami
+{"environment":"production","hostname":"movie-64cf798b8d-g6bzp"}
+```
+
+**Q6.3** — Les variables d'environnement injectées via `envFrom` sont passées aux processus lors de la création initiale du conteneur par le runtime. Modifier une `ConfigMap` met à jour la ressource dans le plan de contrôle Kubernetes (etcd), mais n'a aucun impact dynamique sur les processus Linux déjà en cours d'exécution dans les conteneurs existants. La commande `kubectl rollout restart deploy/movie` a déclenché un rolling update qui a recréé de nouveaux Pods dont l'environnement a été initialisé avec les nouvelles valeurs de la ConfigMap.
+
+---
+

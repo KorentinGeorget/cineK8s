@@ -4,7 +4,7 @@ metadata:
   name: movie-config
   namespace: cinema-exam
 data:
-  MOVIE_ENVIRONMENT: kubernetes
+  MOVIE_ENVIRONMENT: production
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -14,13 +14,13 @@ spec:
       containers:
         - name: ticket
           image: ticket-service:1.0.0
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
           envFrom:
             - configMapRef:
-                name: ticket-configmap
+                name: ticket-config
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: 8081 }
+            httpGet: { path: /actuator/health/readiness, port: 8080 }
             periodSeconds: 5

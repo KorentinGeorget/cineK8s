@@ -321,3 +321,64 @@ $ curl -s http://cinema.local/api/movies/whoami
 
 ---
 
+## ⭐ Bonus — Durcir et fiabiliser
+
+### ⭐ B1 — Durcissement du conteneur `movie`
+
+Le manifest `k8s/20-movie.yaml` a été enrichi d'un `securityContext` strict interdisant le mode root, fixant l'UID à 10001, interdisant l'escalade de privilèges, abandonnant toutes les capabilities Linux et montant le système de fichiers racine en lecture seule. Un volume `emptyDir` a été monté sur `/tmp` pour permettre les écritures temporaires requises par le moteur Tomcat de Spring Boot :
+```yaml
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+```
+
+**Vérifications :**
+```bash
+$ kubectl exec deploy/movie -- id
+uid=10001(spring) gid=101(spring) groups=101(spring)
+
+$ kubectl exec deploy/movie -- touch /test
+touch: cannot touch '/test': Read-only file system
+command terminated with exit code 1
+
+$ kubectl get pods -l app=movie
+NAME                    READY   STATUS    RESTARTS   AGE
+movie-84cc6cc79-n6mvb   1/1     Running   0          45s
+movie-84cc6cc79-pkwq5   1/1     Running   0          50s
+```
+
+### ⭐ B2 — Rolling update sans coupure
+
+Configuration de la stratégie de mise à jour dans `k8s/20-movie.yaml` :
+```yaml
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+```
+
+Exécution du test de charge pendant `kubectl rollout restart deploy/movie` :
+```bash
+$ for i in $(seq 1 100); do
+    curl -s --resolve cinema.local:80:$(minikube ip) -o /dev/null -w '%{http_code}\n' http://cinema.local/api/movies
+    sleep 0.15
+  done | sort | uniq -c
+    100 200
+```
+
+**QB2 — Analyse des trois éléments contribuant au zéro-downtime :**
+1. **`strategy: RollingUpdate (maxUnavailable: 0, maxSurge: 1)`** : Impose qu'aucun Pod ne soit rendu indisponible en dessous du nombre de réplicas désiré (2 réplicas minimum maintenus en permanence) et autorise la création préalable d'un nouveau Pod supplémentaire (+1 surge) avant toute terminaison.
+2. **`readinessProbe`** : Empêche Kubernetes de router du trafic vers le nouveau Pod tant qu'il n'a pas validé son endpoint Actuator `/actuator/health/readiness`. De même, l'ancien Pod n'est détruit qu'une fois le nouveau Pod officiellement prêt et actif dans les Endpoints du Service.
+3. **`server.shutdown: graceful`** : Dès que l'ancien Pod reçoit le signal de terminaison `SIGTERM`, Tomcat stoppe la réception de nouvelles requêtes mais accorde un délai de grâce pour achever le traitement de toutes les requêtes en vol, éliminant ainsi toute coupure de connexion ou erreur 502 côté client.

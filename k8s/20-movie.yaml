@@ -5,6 +5,11 @@ metadata:
   namespace: cinema-exam
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: movie
@@ -17,6 +22,17 @@ spec:
         - name: movie
           image: movie-service:1.0.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           ports:
             - name: http
               containerPort: 8080
@@ -45,6 +61,9 @@ spec:
               path: /actuator/health/readiness
               port: http
             periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

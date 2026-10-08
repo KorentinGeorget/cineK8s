@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: movie-config
+  namespace: cinema-exam
+data:
+  MOVIE_ENVIRONMENT: kubernetes
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ticket-config
+  namespace: cinema-exam
+data:
+  MOVIE_URL: http://movie:8080

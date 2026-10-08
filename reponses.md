@@ -118,3 +118,59 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8082/api/tickets \
 
 ---
 
+## Partie 4 — Déployer sur Minikube
+
+### Sorties de vérification demandées
+
+État des Pods :
+```bash
+$ kubectl get pods
+NAME                      READY   STATUS    RESTARTS   AGE
+movie-59684459f4-trd4g    1/1     Running   0          32s
+movie-59684459f4-x8qsx    1/1     Running   0          32s
+ticket-66d95c98b6-ct7wp   1/1     Running   0          32s
+ticket-66d95c98b6-vc2xx   1/1     Running   0          32s
+```
+
+Endpoints des Services :
+```bash
+$ kubectl get endpoints movie ticket
+NAME     ENDPOINTS                           AGE
+movie    10.244.0.53:8080,10.244.0.54:8080   73s
+ticket   10.244.0.55:8080,10.244.0.56:8080   73s
+```
+
+Réservation créée via le port-forward :
+```bash
+$ kubectl port-forward svc/ticket 8082:8080 &
+$ curl -s -X POST localhost:8082/api/tickets -H 'Content-Type: application/json' \
+  -d '{"movieId":2,"seats":2}' | jq
+```
+```json
+{
+  "id": 1,
+  "movieId": 2,
+  "movieTitle": "Le Seigneur des Pods",
+  "seats": 2,
+  "total": 24.00,
+  "createdAt": "2026-10-08T09:13:05.159105201Z"
+}
+```
+
+Appels inter-services vérifiés :
+```bash
+$ kubectl exec deploy/ticket -- wget -qO- http://movie:8080/api/movies/whoami
+{"environment":"kubernetes","hostname":"movie-59684459f4-x8qsx"}
+
+$ kubectl exec deploy/ticket -- wget -qO- http://localhost:8080/actuator/health/readiness
+{"status":"UP","components":{"movie":{"status":"UP"},"readinessState":{"status":"UP"}}}
+```
+
+**Q4.1** — `kubectl apply -f k8s/` traite les manifests par ordre alphabétique (lexicographique) des fichiers. Les préfixes (`00-`, `10-`, `20-`, `30-`, `40-`) permettent de structurer et d'assurer l'ordre de création des dépendances : le Namespace d'abord (`00-`), puis les ConfigMaps (`10-`), le service indépendant `movie` (`20-`), le service dépendant `ticket` (`30-`), et enfin l'Ingress (`40-`).
+
+**Q4.2** — La probe responsable est la `startupProbe`. Ce n'est pas une anomalie : la JVM et Spring Boot prennent entre 10 et 30 secondes pour initialiser le contexte applicatif et démarrer le serveur Tomcat. La `startupProbe` désactive l'exécution des liveness et readiness probes durant cette phase initiale, évitant que la liveness probe ne tue prématurément le conteneur avant la fin de son démarrage.
+
+**Q4.3** — Avec `imagePullPolicy: Always`, le kubelet tenterait de contacter systématiquement le registre distant Docker Hub (`docker.io/library/...`) pour télécharger l'image à chaque instanciation de Pod. Comme nos images sont uniquement construites et chargées en local sur le nœud Minikube et ne sont pas publiées sur un registre externe distant, les Pods échoueraient avec l'erreur `ErrImagePull` puis `ImagePullBackOff`.
+
+---
+

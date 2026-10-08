@@ -303,3 +303,21 @@ $ curl -s http://cinema.local/api/movies/whoami
 
 ---
 
+## Partie 7 — Questions de synthèse
+
+**Q7.1** — Déroulement d'un appel `GET http://movie:8080/api/movies/1` depuis un Pod `ticket` :
+1. *Résolution DNS* : La JVM interroge le résolveur DNS interne du cluster (`CoreDNS`) via `/etc/resolv.conf`. CoreDNS résout le nom court `movie` (complété en `movie.cinema-exam.svc.cluster.local`) en l'adresse IP virtuelle du Service (`ClusterIP`).
+2. *Routage et Load Balancing* : Lorsque le paquet TCP quitte le conteneur à destination de cette `ClusterIP`, les règles réseau gérées par `kube-proxy` (via iptables ou IPVS sur le nœud) interceptent le paquet et appliquent une translation d'adresse de destination (DNAT) en sélectionnant aléatoirement l'IP d'un Pod `movie` sain listé dans les Endpoints du Service.
+3. *Acheminement et exécution* : Le réseau de pods (CNI) achemine le paquet vers l'interface réseau du Pod `movie` sélectionné, où le serveur web Tomcat écoute sur le port `8080` et traite la requête.
+
+**Q7.2** — 
+- *Pourquoi le nombre varie* : `TicketController` stocke ses réservations dans une liste en mémoire (`CopyOnWriteArrayList tickets`), propre à l'instance JVM de chaque conteneur. Comme l'Ingress et le Service distribuent le trafic entre les 2 réplicas de `ticket`, chaque appel interroge alternativement l'un ou l'autre Pod, renvoyant uniquement son propre historique local.
+- *Si on supprime les Pods `ticket`* : La mémoire étant volatile, la suppression des conteneurs entraîne la perte définitive de toutes les réservations (la liste retombe à 0).
+- *Solution architecturale* : Transformer le microservice pour le rendre **stateless** (sans état en mémoire) en déléguant la persistance à une base de données externe et partagée (ex. PostgreSQL, MySQL ou un cluster Redis), éventuellement gérée via des `PersistentVolumes` et un `StatefulSet` ou un service managé.
+
+**Q7.3** — 
+- *Constat* : Dès la suppression du Pod, un nouveau Pod `movie` est instantanément créé et démarré par Kubernetes pour maintenir l'état désiré de 2 réplicas.
+- *Différence avec un Pod nu (`kind: Pod`)* : Un Pod nu n'est managé par aucun contrôleur. S'il plante, est supprimé ou si son nœud physique tombe en panne, il disparaît définitivement sans jamais être recréé. L'abstraction `Deployment` (qui orchestre un `ReplicaSet`) apporte la boucle de réconciliation (auto-healing), la gestion déclarative du cycle de vie (maintien du quorum de réplicas), ainsi que les mises à jour progressives (rolling updates) et retours arrière (rollbacks) sans coupure.
+
+---
+

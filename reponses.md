@@ -31,3 +31,80 @@ Ligne complétée dans `ticket-service/src/main/resources/application.yaml` :
 
 ---
 
+## Partie 2 — Tester en local, sans Kubernetes
+
+### 2.1 — Sorties des commandes demandées
+
+Réservation via `ticket-service` :
+```bash
+$ curl -s -X POST localhost:8082/api/tickets \
+  -H 'Content-Type: application/json' \
+  -d '{"movieId":2,"seats":3}' | jq
+```
+```json
+{
+  "id": 2,
+  "movieId": 2,
+  "movieTitle": "Le Seigneur des Pods",
+  "seats": 3,
+  "total": 36.00,
+  "createdAt": "2026-10-08T09:05:06.303531042Z"
+}
+```
+
+Readiness de `ticket-service` avec `movie-service` actif :
+```bash
+$ curl -s localhost:8082/actuator/health/readiness | jq
+```
+```json
+{
+  "status": "UP",
+  "components": {
+    "movie": {
+      "status": "UP"
+    },
+    "readinessState": {
+      "status": "UP"
+    }
+  }
+}
+```
+
+### 2.2 — Coupure de `movie-service`
+
+Sorties après arrêt du processus `movie-service` :
+```bash
+$ curl -s localhost:8082/actuator/health/readiness | jq
+```
+```json
+{
+  "status": "DOWN",
+  "components": {
+    "movie": {
+      "status": "DOWN",
+      "details": {
+        "error": "I/O error on GET request for \"http://localhost:8080/actuator/health/liveness\": null"
+      }
+    },
+    "readinessState": {
+      "status": "UP"
+    }
+  }
+}
+```
+
+```bash
+$ curl -s localhost:8082/actuator/health/liveness | jq .status
+"UP"
+
+$ curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8082/api/tickets \
+  -H 'Content-Type: application/json' -d '{"movieId":2,"seats":3}'
+503
+```
+
+**Q2.1** — On utilise `SERVER_PORT=8082` pour respecter le principe de configuration externalisée (Twelve-Factor App) sans altérer les fichiers de configuration versionnés dans le dépôt Git. Le mécanisme Spring Boot qui rend cela possible est la hiérarchie des `PropertySource` combinée au *relaxed binding*, où les variables d'environnement système ont une priorité supérieure à celle des fichiers `application.yaml` / `application.properties`.
+
+**Q2.2** — C'est exactement le comportement attendu car le processus `ticket-service` lui-même est sain (JVM en cours d'exécution, mémoire intacte, pas de blocage interne), donc la liveness doit rester `UP` pour éviter un redémarrage inutile. En revanche, sa dépendance externe étant indisponible, il est temporairement incapable de traiter des réservations, ce qui doit se traduire par une readiness `DOWN` afin d'isoler le service du flux de requêtes.
+
+---
+
